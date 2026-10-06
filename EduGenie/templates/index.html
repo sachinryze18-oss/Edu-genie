@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EduGenie – Learning Assistant</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="container">
+    <header>
+      <h1>🎓 EduGenie</h1>
+      <p>Your Gemini-powered learning assistant</p>
+    </header>
+
+    <section class="card">
+      <label for="task">Choose a task</label>
+      <select id="task">
+        <option value="qa">Ask a Question (QnA)</option>
+        <option value="explain">Explain a Concept</option>
+        <option value="quiz">Generate Quiz</option>
+        <option value="summarize">Summarize Text</option>
+        <option value="recommend">Recommend Learning Path</option>
+      </select>
+
+      <label for="input" id="input-label">Your input</label>
+      <textarea id="input" rows="6" placeholder="Which is the largest ocean?"></textarea>
+
+      <button id="submit">Submit</button>
+    </section>
+
+    <section id="result" class="card hidden" aria-live="polite"></section>
+  </main>
+
+  <script>
+    const ENDPOINTS = {
+      qa: "/qa", explain: "/explain", quiz: "/quiz",
+      summarize: "/summarize", recommend: "/learn/recommendations"
+    };
+    const PLACEHOLDERS = {
+      qa: "Which is the largest ocean?",
+      explain: "Photosynthesis",
+      quiz: "Pythagoras Theorem (or paste a passage)",
+      summarize: "Paste a long paragraph here...",
+      recommend: "SQL"
+    };
+
+    const taskEl = document.getElementById("task");
+    const inputEl = document.getElementById("input");
+    const resultEl = document.getElementById("result");
+    const btn = document.getElementById("submit");
+
+    taskEl.addEventListener("change", () => inputEl.placeholder = PLACEHOLDERS[taskEl.value]);
+
+    function esc(s) {
+      return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+    }
+
+    // Minimal markdown: headings, bold, bullets, paragraphs (input is escaped first)
+    function renderText(text) {
+      const lines = esc(text).split("\n");
+      let html = "", inList = false;
+      for (let line of lines) {
+        line = line.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+        const li = line.match(/^\s*[-*]\s+(.*)/);
+        if (li) {
+          if (!inList) { html += "<ul>"; inList = true; }
+          html += `<li>${li[1]}</li>`;
+          continue;
+        }
+        if (inList) { html += "</ul>"; inList = false; }
+        const h = line.match(/^#{1,6}\s+(.*)/);
+        if (h) html += `<h3>${h[1]}</h3>`;
+        else if (line.trim()) html += `<p>${line}</p>`;
+      }
+      if (inList) html += "</ul>";
+      return html;
+    }
+
+    function renderQuiz(questions) {
+      let score = 0, answered = 0;
+      const wrap = document.createElement("div");
+      wrap.innerHTML = "<h2>Quiz</h2>";
+      const scoreEl = document.createElement("p");
+      scoreEl.className = "score";
+
+      questions.forEach((q, i) => {
+        const box = document.createElement("div");
+        box.className = "question";
+        box.innerHTML = `<p><strong>Q${i + 1}. ${esc(q.question)}</strong></p>`;
+        const fb = document.createElement("p");
+        fb.className = "feedback";
+
+        q.options.forEach(opt => {
+          const b = document.createElement("button");
+          b.className = "option";
+          b.textContent = opt;
+          b.onclick = () => {
+            if (box.dataset.done) return;
+            box.dataset.done = "1";
+            answered++;
+            const correct = opt === q.answer;
+            if (correct) score++;
+            b.classList.add(correct ? "correct" : "wrong");
+            fb.textContent = correct ? "✅ Correct!" : `❌ Incorrect. The correct answer is: ${q.answer}`;
+            box.querySelectorAll(".option").forEach(o => {
+              if (o.textContent === q.answer) o.classList.add("correct");
+              o.disabled = true;
+            });
+            if (answered === questions.length) scoreEl.textContent = `Your score: ${score} / ${questions.length}`;
+          };
+          box.appendChild(b);
+        });
+        box.appendChild(fb);
+        wrap.appendChild(box);
+      });
+      wrap.appendChild(scoreEl);
+      return wrap;
+    }
+
+    btn.addEventListener("click", async () => {
+      const text = inputEl.value.trim();
+      if (!text) { inputEl.focus(); return; }
+      const task = taskEl.value;
+
+      btn.disabled = true; btn.textContent = "Thinking...";
+      resultEl.classList.remove("hidden");
+      resultEl.innerHTML = '<p class="muted">Working on it…</p>';
+
+      try {
+        const res = await fetch(ENDPOINTS[task], {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text })
+        });
+        if (!res.ok) throw new Error(`Server error (${res.status})`);
+        const { result } = await res.json();
+
+        resultEl.innerHTML = "";
+        if (task === "quiz") {
+          if (result.error) resultEl.innerHTML = `<p class="error">${esc(result.error)}</p>`;
+          else resultEl.appendChild(renderQuiz(result));
+        } else {
+          resultEl.innerHTML = renderText(result);
+        }
+      } catch (err) {
+        resultEl.innerHTML = `<p class="error">${esc(err.message)}</p>`;
+      } finally {
+        btn.disabled = false; btn.textContent = "Submit";
+      }
+    });
+  </script>
+</body>
+</html>
